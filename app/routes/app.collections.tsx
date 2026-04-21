@@ -218,6 +218,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
 
       const payload = await response.json();
+      const graphqlError = getGraphqlErrorMessage(payload);
+      if (graphqlError) {
+        return json({ ok: false, error: graphqlError });
+      }
+
       const userErrors = payload.data?.metafieldsSet?.userErrors ?? [];
 
       if (userErrors.length) {
@@ -239,7 +244,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const res = await admin.graphql(
         `#graphql
         mutation ClearSchedule($metafields: [MetafieldIdentifierInput!]!) {
-          metafieldsByIdentifierDelete(metafields: $metafields) {
+          metafieldsDelete(metafields: $metafields) {
             deletedMetafields { key namespace ownerId }
             userErrors { field message }
           }
@@ -255,7 +260,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
 
       const p = await res.json();
-      const errs = p.data?.metafieldsByIdentifierDelete?.userErrors ?? [];
+      const graphqlError = getGraphqlErrorMessage(p);
+      if (graphqlError) {
+        return json({ ok: false, error: graphqlError });
+      }
+
+      const errs = p.data?.metafieldsDelete?.userErrors ?? [];
       if (errs.length) {
         return json({ ok: false, error: errs.map((e: any) => e.message).join("; ") });
       }
@@ -276,6 +286,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 function isoToDateInput(iso: string | null | undefined): string {
   if (!iso) return "";
   return iso.includes("T") ? iso.split("T")[0] : iso;
+}
+
+function getGraphqlErrorMessage(payload: any): string | null {
+  const messages = payload?.errors
+    ?.map((error: { message?: string }) => error?.message)
+    .filter(Boolean);
+
+  if (!messages?.length) {
+    return null;
+  }
+
+  return messages.join("; ");
 }
 
 function scheduleStatus(
