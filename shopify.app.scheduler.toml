@@ -1,0 +1,25 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "ff32758ceec181da3119019d73441ace"
+name = "Scheduler"
+application_url = "https://scheduler.playr-fit.com"
+embedded = true
+handle = "collection-scheduler-1"
+
+[auth]
+redirect_urls = [
+  "https://scheduler.playr-fit.com/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,read_publications,write_publications"
+optional_scopes = [ ]
+use_legacy_install_flow = false

@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SyncDesiredState {
+  PUBLISHED
+  UNPUBLISHED
+  UNKNOWN
+}
+
+enum SyncAction {
+  PUBLISH
+  UNPUBLISH
+  SKIP
+  ERROR
+}
+
+enum SyncStatus {
+  SUCCESS
+  SKIPPED
+  ERROR
+  DRY_RUN
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop, isOnline])
+}
+
+model Shop {
+  id                  String    @id @default(cuid())
+  shopDomain          String    @unique
+  targetPublicationId String?
+  metafieldNamespace  String    @default("schedule")
+  startDateKey        String    @default("start_date")
+  endDateKey          String    @default("end_date")
+  shopIanaTimezone    String?
+  isActive            Boolean   @default(true)
+  lastSyncedAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  syncLogs            SyncLog[]
+
+  @@index([isActive])
+}
+
+model SyncLog {
+  id             String           @id @default(cuid())
+  shopId         String
+  collectionGid  String
+  publicationGid String
+  desiredState   SyncDesiredState @default(UNKNOWN)
+  previousState  Boolean?
+  action         SyncAction
+  status         SyncStatus
+  message        String?
+  executedAt     DateTime         @default(now())
+  jobRunId       String?
+  dryRun         Boolean          @default(false)
+  shop           Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, executedAt(sort: Desc)])
+  @@index([collectionGid, publicationGid, executedAt(sort: Desc)])
+  @@index([jobRunId])
+}
