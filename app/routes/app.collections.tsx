@@ -233,40 +233,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (actionType === "clearSchedule") {
-    const startId = formData.get("startMetafieldId") as string | null;
-    const endId = formData.get("endMetafieldId") as string | null;
-    const errors: string[] = [];
+    const collectionId = formData.get("collectionId") as string;
 
-    for (const id of [startId, endId]) {
-      if (!id) continue;
+    try {
+      const res = await admin.graphql(
+        `#graphql
+        mutation ClearSchedule($metafields: [MetafieldIdentifierInput!]!) {
+          metafieldsByIdentifierDelete(metafields: $metafields) {
+            deletedMetafields { key namespace ownerId }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: [
+              { ownerId: collectionId, namespace, key: startKey },
+              { ownerId: collectionId, namespace, key: endKey },
+            ],
+          },
+        },
+      );
 
-      try {
-        const res = await admin.graphql(
-          `#graphql
-          mutation DeleteMetafield($id: ID!) {
-            metafieldDelete(input: { id: $id }) {
-              deletedId
-              userErrors { field message }
-            }
-          }`,
-          { variables: { id } },
-        );
-
-        const p = await res.json();
-        const errs = p.data?.metafieldDelete?.userErrors ?? [];
-        if (errs.length) errors.push(...errs.map((e: any) => e.message));
-      } catch (err: any) {
-        const message =
-          err?.graphQLErrors?.[0]?.message ?? err?.message ?? "Shopify API error";
-        errors.push(message);
+      const p = await res.json();
+      const errs = p.data?.metafieldsByIdentifierDelete?.userErrors ?? [];
+      if (errs.length) {
+        return json({ ok: false, error: errs.map((e: any) => e.message).join("; ") });
       }
-    }
 
-    if (errors.length) {
-      return json({ ok: false, error: errors.join("; ") });
+      return json({ ok: true });
+    } catch (err: any) {
+      const message =
+        err?.graphQLErrors?.[0]?.message ?? err?.message ?? "Shopify API error";
+      return json({ ok: false, error: message });
     }
-
-    return json({ ok: true });
   }
 
   return json({ ok: false, error: "Unknown action" });
@@ -340,11 +339,7 @@ export default function CollectionsPage() {
   const handleClear = useCallback(
     (col: CollectionRow) => {
       fetcher.submit(
-        {
-          actionType: "clearSchedule",
-          startMetafieldId: col.startDateMeta?.id ?? "",
-          endMetafieldId: col.endDateMeta?.id ?? "",
-        },
+        { actionType: "clearSchedule", collectionId: col.id },
         { method: "post" },
       );
     },
