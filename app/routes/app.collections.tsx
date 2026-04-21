@@ -186,44 +186,50 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const startDate = formData.get("startDate") as string;
     const endDate = formData.get("endDate") as string;
 
-    const response = await admin.graphql(
-      `#graphql
-      mutation SetSchedule($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          metafields { id namespace key value }
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          metafields: [
-            {
-              ownerId: collectionId,
-              namespace,
-              key: startKey,
-              value: `${startDate}T00:00:00Z`,
-              type: "date_time",
-            },
-            {
-              ownerId: collectionId,
-              namespace,
-              key: endKey,
-              value: `${endDate}T00:00:00Z`,
-              type: "date_time",
-            },
-          ],
+    try {
+      const response = await admin.graphql(
+        `#graphql
+        mutation SetSchedule($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id namespace key value }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: [
+              {
+                ownerId: collectionId,
+                namespace,
+                key: startKey,
+                value: `${startDate}T00:00:00Z`,
+                type: "date_time",
+              },
+              {
+                ownerId: collectionId,
+                namespace,
+                key: endKey,
+                value: `${endDate}T00:00:00Z`,
+                type: "date_time",
+              },
+            ],
+          },
         },
-      },
-    );
+      );
 
-    const payload = await response.json();
-    const userErrors = payload.data?.metafieldsSet?.userErrors ?? [];
+      const payload = await response.json();
+      const userErrors = payload.data?.metafieldsSet?.userErrors ?? [];
 
-    if (userErrors.length) {
-      return json({ ok: false, error: userErrors.map((e: any) => e.message).join("; ") });
+      if (userErrors.length) {
+        return json({ ok: false, error: userErrors.map((e: any) => e.message).join("; ") });
+      }
+
+      return json({ ok: true });
+    } catch (err: any) {
+      const message =
+        err?.graphQLErrors?.[0]?.message ?? err?.message ?? "Shopify API error";
+      return json({ ok: false, error: message });
     }
-
-    return json({ ok: true });
   }
 
   if (actionType === "clearSchedule") {
@@ -234,20 +240,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     for (const id of [startId, endId]) {
       if (!id) continue;
 
-      const res = await admin.graphql(
-        `#graphql
-        mutation DeleteMetafield($id: ID!) {
-          metafieldDelete(input: { id: $id }) {
-            deletedId
-            userErrors { field message }
-          }
-        }`,
-        { variables: { id } },
-      );
+      try {
+        const res = await admin.graphql(
+          `#graphql
+          mutation DeleteMetafield($id: ID!) {
+            metafieldDelete(input: { id: $id }) {
+              deletedId
+              userErrors { field message }
+            }
+          }`,
+          { variables: { id } },
+        );
 
-      const p = await res.json();
-      const errs = p.data?.metafieldDelete?.userErrors ?? [];
-      if (errs.length) errors.push(...errs.map((e: any) => e.message));
+        const p = await res.json();
+        const errs = p.data?.metafieldDelete?.userErrors ?? [];
+        if (errs.length) errors.push(...errs.map((e: any) => e.message));
+      } catch (err: any) {
+        const message =
+          err?.graphQLErrors?.[0]?.message ?? err?.message ?? "Shopify API error";
+        errors.push(message);
+      }
     }
 
     if (errors.length) {
