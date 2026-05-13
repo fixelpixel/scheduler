@@ -11,6 +11,9 @@
     "start": "remix-serve ./build/server/index.js",
     "shopify": "shopify",
     "typecheck": "tsc --noEmit",
+    "typecheck:checkout-extension": "tsc --noEmit -p tsconfig.checkout-extension.json",
+    "verify:schedule-contract": "node scripts/verify-schedule-contract.mjs",
+    "verify:checkout-schedule": "node scripts/verify-checkout-schedule.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev"
   },
@@ -28,9 +31,11 @@
   },
   "devDependencies": {
     "@remix-run/dev": "^2.16.1",
+    "@shopify/ui-extensions": "^2026.4.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "preact": "^10.29.1",
     "prisma": "^6.2.1",
     "typescript": "^5.7.2",
     "vite": "^5.4.12",

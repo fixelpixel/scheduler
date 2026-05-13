@@ -1,0 +1,85 @@
+{{ 'scheduler-countdown.css' | asset_url | stylesheet_tag }}
+
+<div
+  class="scheduler-countdown is-loading"
+  data-scheduler-countdown
+  data-shop-domain="{{ shop.permanent_domain | escape }}"
+  data-collection-handle="{{ collection.handle | default: '' | escape }}"
+  data-product-handle="{{ product.handle | default: '' | escape }}"
+  data-app-url="{{ block.settings.app_url | escape }}"
+  data-default-variant="{{ block.settings.default_variant | default: 'theme_native' | escape }}"
+  data-countdown-label="{{ block.settings.countdown_label | default: 'Orders close in' | escape }}"
+  style="
+    --scheduler-countdown-bg: {{ block.settings.background_color | default: '#111827' }};
+    --scheduler-countdown-fg: {{ block.settings.text_color | default: '#ffffff' }};
+    --scheduler-countdown-accent: {{ block.settings.accent_color | default: '#38bdf8' }};
+  "
+  aria-busy="true"
+  aria-live="polite"
+>
+  <div class="scheduler-countdown__inner" data-scheduler-countdown-content></div>
+</div>
+
+<script src="{{ 'scheduler-countdown.js' | asset_url }}?v=20260513-4" defer></script>
+
+{% schema %}
+{
+  "name": "Scheduler countdown",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "App URL"
+    },
+    {
+      "type": "select",
+      "id": "default_variant",
+      "label": "Default style",
+      "default": "theme_native",
+      "options": [
+        {
+          "value": "theme_native",
+          "label": "Theme native"
+        },
+        {
+          "value": "inline_product_form",
+          "label": "Inline product form"
+        },
+        {
+          "value": "collection_bar",
+          "label": "Collection bar"
+        },
+        {
+          "value": "compact_banner",
+          "label": "Compact banner"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "countdown_label",
+      "label": "Countdown label",
+      "default": "Orders close in"
+    },
+    {
+      "type": "color",
+      "id": "background_color",
+      "label": "Background",
+      "default": "#111827"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent",
+      "default": "#38bdf8"
+    }
+  ]
+}
+{% endschema %}

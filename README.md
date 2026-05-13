@@ -25,9 +25,18 @@ A Shopify embedded app that automatically publishes and unpublishes collections 
 
 ## Overview
 
-Collection Scheduler reads two date metafields (`start_date`, `end_date`) from Shopify collections and controls their visibility on a target publication (e.g. Online Store). The scheduler compares today's date in the shop's local timezone against the defined window and calls `publishablePublish` or `publishableUnpublish` accordingly.
+Collection Scheduler reads schedule metafields from Shopify collections and, when `availability_mode=managed`, changes product availability for products in the collection. Storefront and checkout notices are display-only and do not control publication or product status.
 
-**Example use case:** A school kit collection should go live on 1 February and close on 5 March. Set `custom.start_date = 2026-02-01` and `custom.end_date = 2026-03-05` — the scheduler handles the rest automatically.
+**Example use case:** A school kit collection should go live on 1 February and close on 5 March. Set `schedule.start_date = 2026-02-01`, `schedule.end_date = 2026-03-05`, and `schedule.availability_mode = managed` — the scheduler handles the availability window.
+
+## Production Iteration Docs
+
+The next review-ready iteration separates availability automation from display notices:
+
+- Architecture, data contract, and implementation phases: [`docs/scheduler-production-architecture.md`](docs/scheduler-production-architecture.md)
+- QA matrix, deployment checklist, and rollback checklist: [`docs/scheduler-production-qa.md`](docs/scheduler-production-qa.md)
+
+Key rule: `availability_mode=managed` is the only mode that can change product availability. Storefront and checkout display modes never publish, unpublish, activate, or deactivate products.
 
 ---
 
@@ -148,7 +157,9 @@ The scheduler reads metafields using the namespace and keys configured per shop 
 **Metafield type:** `date_time`  
 **Value format:** ISO 8601 UTC — e.g. `2026-02-01T00:00:00Z`
 
-The scheduler engine normalises both `date` (`YYYY-MM-DD`) and `date_time` (`YYYY-MM-DDTHH:mm:ssZ`) formats, so either type works. Date comparison uses the shop's IANA timezone.
+The scheduler engine supports both `date` (`YYYY-MM-DD`) and `date_time` (`YYYY-MM-DDTHH:mm:ssZ`) formats:
+- `date` values are treated as full-day windows in the shop's IANA timezone
+- `date_time` values are respected as exact timestamps, including the time component
 
 **Setting up metafields in Shopify Admin:**
 
@@ -166,12 +177,13 @@ The scheduler engine normalises both `date` (`YYYY-MM-DD`) and `date_time` (`YYY
 The core evaluation is in [`app/services/scheduler-engine.server.ts`](app/services/scheduler-engine.server.ts):
 
 ```
-today = current date in shop's timezone
+now = current instant
 
-if today >= start_date AND today <= end_date:
-    shouldBePublished = true    → publish if not already published
-else:
-    shouldBePublished = false   → unpublish if currently published
+if start/end are date-only:
+    compare against full-day boundaries in the shop timezone
+
+if start/end include time:
+    compare against the exact timestamps
 ```
 
 **Validation rules:**
@@ -250,6 +262,34 @@ Triggers a sync run for the authenticated shop. Requires a valid Shopify admin s
 
 > **Automation note:** This endpoint requires Shopify session auth and cannot be called by an external cron directly. To automate, add a separate cron endpoint protected by a shared secret (see [Known Issues](#known-issues--limitations)).
 
+### `GET /api/cron/run` or `POST /api/cron/run`
+Triggers the scheduler without Shopify admin session auth. Requires `CRON_SECRET`.
+
+Send either:
+- header `X-CRON-SECRET: <secret>`
+- header `Authorization: Bearer <secret>`
+
+Optional query params:
+- `shop=<my-shop.myshopify.com>` to run one shop only
+- `dryRun=true` to simulate without mutations
+- `jobRunId=<id>` to group one execution in logs
+
+### `GET /api/storefront-schedule`
+Public storefront notice endpoint for the theme app extension. Accepts `shop` plus optional `collectionHandle` and `productHandle`. Returns only display-safe schedule fields and uses no-store cache headers.
+
+### `POST /api/checkout-schedule`
+Public-safe checkout notice endpoint for the Shopify checkout UI extension. Accepts `shop` in the query string and product/variant GIDs in a bounded JSON body. Returns only:
+```json
+{
+  "mode": "none | countdown_to_end | message",
+  "endDate": "string | null",
+  "message": "string | null",
+  "serverTime": "string"
+}
+```
+
+Do not log checkout payloads, cart data, customer data, product IDs, variant IDs, or checkout tokens.
+
 ---
 
 ## Environment Variables
@@ -272,6 +312,9 @@ DATABASE_URL="postgresql://postgres:yourpassword@localhost:5432/collection_sched
 
 # Used by docker-compose postgres service
 POSTGRES_PASSWORD=yourpassword
+
+# Shared secret for external cron calls to /api/cron/run
+CRON_SECRET=replace_with_a_long_random_secret
 
 # App port (default 3000)
 PORT=3000
@@ -384,8 +427,8 @@ After adding `write_products` to an existing installation, the merchant must re-
 
 ## Known Issues & Limitations
 
-### No automated scheduler execution
-There is no built-in cron. The scheduler only runs when manually triggered from the dashboard or via `POST /api/scheduler/run`. To automate, add a new route (e.g. `POST /api/cron/run`) protected by a `CRON_SECRET` environment variable, and call it from an external cron service (cron-job.org, systemd timer, etc.).
+### Scheduler requires an external trigger
+The app does not self-schedule inside Shopify. Use the dashboard, `POST /api/scheduler/run`, or configure an external cron to call `/api/cron/run` with `CRON_SECRET`.
 
 ### `write_products` scope requires re-install
 If the app was installed before `write_products` was added to the scope list, the existing session will not have this permission. The merchant must re-install (or re-authorize) the app.

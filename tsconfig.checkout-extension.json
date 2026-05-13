@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "types": ["@shopify/ui-extensions"]
+  },
+  "include": ["extensions/checkout-schedule/src/**/*.ts", "extensions/checkout-schedule/src/**/*.tsx"]
+}

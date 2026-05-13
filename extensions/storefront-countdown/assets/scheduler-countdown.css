@@ -1,0 +1,201 @@
+.scheduler-countdown {
+  --scheduler-countdown-bg: rgb(17 24 39);
+  --scheduler-countdown-fg: rgb(255 255 255);
+  --scheduler-countdown-accent: rgb(56 189 248);
+  --scheduler-countdown-muted: color-mix(in srgb, var(--scheduler-countdown-fg) 74%, transparent);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 4.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--scheduler-countdown-bg);
+  color: var(--scheduler-countdown-fg);
+  font: inherit;
+}
+
+.scheduler-countdown,
+.scheduler-countdown * {
+  box-sizing: border-box;
+}
+
+.scheduler-countdown[hidden],
+.scheduler-countdown.is-empty {
+  display: none;
+}
+
+.scheduler-countdown.is-loading {
+  background: transparent;
+}
+
+.scheduler-countdown__inner {
+  box-sizing: border-box;
+  width: min(100%, 72rem);
+  min-height: 2.75rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+
+.scheduler-countdown--theme-native {
+  width: 100%;
+  border-radius: 0;
+}
+
+.scheduler-countdown--inline-product-form {
+  width: 100%;
+  max-width: 44rem;
+  min-height: 0;
+  margin: 0 0 1rem;
+  border-radius: 0.5rem;
+}
+
+.scheduler-countdown--collection-bar {
+  width: 100%;
+  min-height: 3.75rem;
+  border-block: 1px solid color-mix(in srgb, var(--scheduler-countdown-fg) 16%, transparent);
+}
+
+.scheduler-countdown--compact-banner {
+  width: 100%;
+  min-height: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+}
+
+.scheduler-countdown--inline-product-form .scheduler-countdown__inner,
+.scheduler-countdown--compact-banner .scheduler-countdown__inner {
+  width: 100%;
+}
+
+.scheduler-countdown--compact-banner .scheduler-countdown__inner {
+  min-height: 2.25rem;
+}
+
+.scheduler-countdown__message {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.scheduler-countdown__message--expired {
+  color: var(--scheduler-countdown-muted);
+}
+
+.scheduler-countdown__timer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  max-width: 100%;
+}
+
+.scheduler-countdown__label {
+  font-size: 0.875rem;
+  line-height: 1.3;
+  color: var(--scheduler-countdown-muted);
+  overflow-wrap: anywhere;
+}
+
+.scheduler-countdown__units {
+  display: inline-grid;
+  grid-template-columns: repeat(4, minmax(3rem, auto));
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.scheduler-countdown__unit {
+  min-width: 3rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--scheduler-countdown-fg) 18%, transparent);
+  border-radius: 0.375rem;
+}
+
+.scheduler-countdown__value {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.125rem;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--scheduler-countdown-accent);
+}
+
+.scheduler-countdown__name {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  line-height: 1.1;
+  color: var(--scheduler-countdown-muted);
+  text-transform: uppercase;
+}
+
+.scheduler-countdown--inline-product-form .scheduler-countdown__timer {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.scheduler-countdown--inline-product-form .scheduler-countdown__inner {
+  justify-content: flex-start;
+}
+
+.scheduler-countdown--collection-bar .scheduler-countdown__timer {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.scheduler-countdown--compact-banner .scheduler-countdown__timer {
+  gap: 0.5rem;
+}
+
+.scheduler-countdown--compact-banner .scheduler-countdown__units {
+  grid-template-columns: repeat(4, minmax(2.5rem, auto));
+  gap: 0.375rem;
+}
+
+.scheduler-countdown--compact-banner .scheduler-countdown__unit {
+  min-width: 2.5rem;
+  padding: 0.25rem 0.375rem;
+}
+
+.scheduler-countdown--compact-banner .scheduler-countdown__value {
+  font-size: 1rem;
+}
+
+@media (max-width: 40rem) {
+  .scheduler-countdown {
+    min-height: 5rem;
+    padding: 0.75rem;
+  }
+
+  .scheduler-countdown__inner,
+  .scheduler-countdown__timer {
+    gap: 0.5rem;
+  }
+
+  .scheduler-countdown--inline-product-form,
+  .scheduler-countdown--compact-banner {
+    max-width: none;
+    border-radius: 0.375rem;
+  }
+
+  .scheduler-countdown--collection-bar .scheduler-countdown__timer,
+  .scheduler-countdown--inline-product-form .scheduler-countdown__timer {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .scheduler-countdown__units {
+    grid-template-columns: repeat(4, minmax(2.625rem, 1fr));
+    width: 100%;
+    max-width: 22rem;
+  }
+
+  .scheduler-countdown__unit {
+    min-width: 0;
+    padding-inline: 0.375rem;
+  }
+}

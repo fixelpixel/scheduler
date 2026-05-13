@@ -58,6 +58,21 @@ function evaluationReasonToStatus(reason: string): SyncStatus {
   }
 }
 
+type AvailabilityMode = "managed" | "always_live" | "none";
+
+function getAvailabilityMode(input: {
+  availabilityModeValue: string | null | undefined;
+  startDateValue: string | null | undefined;
+  endDateValue: string | null | undefined;
+}): AvailabilityMode {
+  const explicitMode = input.availabilityModeValue?.trim().toLowerCase();
+  if (explicitMode === "managed" || explicitMode === "always_live" || explicitMode === "none") {
+    return explicitMode;
+  }
+
+  return input.startDateValue || input.endDateValue ? "managed" : "none";
+}
+
 export async function runScheduleJobForShop(
   shopDomain: string,
   options: RunScheduleJobOptions = {},
@@ -96,16 +111,18 @@ export async function runScheduleJobForShop(
     };
   }
 
-  const shopTimezone =
-    shop.shopIanaTimezone ??
-    (await getShopIanaTimezone(shop.shopDomain).then(async (timezone) => {
+  let shopTimezone = shop.shopIanaTimezone;
+
+  if (!shopTimezone) {
+    shopTimezone = await getShopIanaTimezone(shop.shopDomain).then(async (timezone: string) => {
       await shopRepository.upsertConfig({
         shopDomain: shop.shopDomain,
         shopIanaTimezone: timezone,
       });
 
       return timezone;
-    }));
+    });
+  }
 
   const summary: ShopScheduleRunSummary = {
     shopDomain,
@@ -134,10 +151,35 @@ export async function runScheduleJobForShop(
     for (const collection of page.collections) {
       summary.scannedCollections += 1;
 
+      const availabilityMode = getAvailabilityMode(collection);
+
+      if (availabilityMode !== "managed") {
+        const message =
+          availabilityMode === "always_live"
+            ? "Always live / reporting only. Scheduler did not change product status."
+            : "No automation. Scheduler skipped this collection.";
+
+        summary.skippedCount += 1;
+        await syncLogRepository.create({
+          shopId: shop.id,
+          collectionGid: collection.id,
+          publicationGid: shop.targetPublicationId,
+          desiredState: SyncDesiredState.UNKNOWN,
+          previousState: collection.isPublishedOnTargetPublication,
+          action: SyncAction.SKIP,
+          status: SyncStatus.SKIPPED,
+          message,
+          jobRunId: options.jobRunId ?? null,
+          dryRun: options.dryRun ?? false,
+        });
+
+        continue;
+      }
+
       const evaluation = evaluateCollectionSchedule({
         startDateValue: collection.startDateValue,
         endDateValue: collection.endDateValue,
-        shopTimezone,
+        shopTimezone: shopTimezone ?? "UTC",
         now: options.now,
       });
 
@@ -145,13 +187,20 @@ export async function runScheduleJobForShop(
         const action = evaluationReasonToAction(evaluation.reason);
         const status = evaluationReasonToStatus(evaluation.reason);
 
+        let message = evaluation.message;
+        if (evaluation.reason === "missing_start_date") {
+          message = `Missing metafield: ${shop.metafieldNamespace}.${shop.startDateKey}`;
+        } else if (evaluation.reason === "missing_end_date") {
+          message = `Missing metafield: ${shop.metafieldNamespace}.${shop.endDateKey}`;
+        }
+
         if (status === SyncStatus.ERROR) {
           summary.errorCount += 1;
         } else {
           summary.skippedCount += 1;
         }
 
-        summary.messages.push(`${collection.id}: ${evaluation.message}`);
+        summary.messages.push(`${collection.id}: ${message}`);
 
         await syncLogRepository.create({
           shopId: shop.id,
@@ -161,7 +210,7 @@ export async function runScheduleJobForShop(
           previousState: collection.isPublishedOnTargetPublication,
           action,
           status,
-          message: evaluation.message,
+          message,
           jobRunId: options.jobRunId ?? null,
           dryRun: options.dryRun ?? false,
         });
@@ -178,24 +227,24 @@ export async function runScheduleJobForShop(
           { dryRun: options.dryRun },
         );
 
-        let action = SyncAction.SKIP;
-        let status = SyncStatus.SKIPPED;
+        let action: SyncAction = SyncAction.SKIP;
+        let status: SyncStatus = SyncStatus.SKIPPED;
         let message = "No visibility change was required.";
 
-        if (syncResult.action === "publish") {
+        if (syncResult.action === "PUBLISH") {
           action = SyncAction.PUBLISH;
-          status = syncResult.dryRun ? SyncStatus.DRY_RUN : SyncStatus.SUCCESS;
+          status = syncResult.dryRun ? SyncStatus.SKIPPED : SyncStatus.SUCCESS;
           summary.publishedCount += 1;
           message = syncResult.dryRun
-            ? "Dry run: collection would be published."
-            : "Collection published on target publication.";
-        } else if (syncResult.action === "unpublish") {
+            ? "Dry run: products would be activated."
+            : "Products in collection set to ACTIVE.";
+        } else if (syncResult.action === "UNPUBLISH") {
           action = SyncAction.UNPUBLISH;
-          status = syncResult.dryRun ? SyncStatus.DRY_RUN : SyncStatus.SUCCESS;
+          status = syncResult.dryRun ? SyncStatus.SKIPPED : SyncStatus.SUCCESS;
           summary.unpublishedCount += 1;
           message = syncResult.dryRun
-            ? "Dry run: collection would be unpublished."
-            : "Collection unpublished from target publication.";
+            ? "Dry run: products would be deactivated."
+            : "Products in collection set to DRAFT.";
         } else {
           summary.skippedCount += 1;
         }
@@ -218,6 +267,10 @@ export async function runScheduleJobForShop(
       } catch (error) {
         summary.errorCount += 1;
         const message = error instanceof Error ? error.message : "Unknown scheduler error.";
+        console.error("[ScheduleJob] Collection sync failed.", {
+          shopDomain,
+          message,
+        });
         summary.messages.push(`${collection.id}: ${message}`);
 
         await syncLogRepository.create({
@@ -282,4 +335,3 @@ export async function runScheduleJobForAllActiveShops(
     shops: summaries,
   };
 }
-

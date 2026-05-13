@@ -1,253 +1,156 @@
-import { shopifyAdminGraphqlRequest, ShopifyAdminGraphqlError } from "./shopify-admin.server";
-
-export type PublicationSummary = {
-  id: string;
-  name: string | null;
-};
+import { shopifyAdminGraphqlRequest } from "./shopify-admin.server";
+import { AVAILABILITY_MODE_KEY, DISPLAY_MODE_KEY } from "./schedule-contract";
 
 export type ScheduledCollection = {
   id: string;
   title: string;
   startDateValue: string | null;
   endDateValue: string | null;
+  availabilityModeValue: string | null;
+  displayModeValue: string | null;
   isPublishedOnTargetPublication: boolean;
 };
 
-export type GetScheduledCollectionsOptions = {
-  publicationId: string;
-  metafieldNamespace: string;
-  startDateKey: string;
-  endDateKey: string;
-  cursor?: string | null;
-  pageSize?: number;
-};
-
-export type ScheduledCollectionsPage = {
+export type GetScheduledCollectionsResult = {
   collections: ScheduledCollection[];
   hasNextPage: boolean;
   nextCursor: string | null;
 };
 
-export type SyncCollectionVisibilityResult = {
-  action: "publish" | "unpublish" | "skip";
+export type SyncResult = {
+  action: "PUBLISH" | "UNPUBLISH" | "SKIP";
   previousState: boolean;
-  currentState: boolean;
-  mutated: boolean;
   dryRun: boolean;
 };
 
-type GetPublicationsResponse = {
-  publications: {
-    nodes: Array<{
-      id: string;
-      name?: string | null;
-    }>;
-  };
+type ProductStatusNode = {
+  id: string;
+  status: string;
 };
 
-type GetShopTimezoneResponse = {
-  shop: {
-    ianaTimezone: string;
-  };
-};
-
-type GetScheduledCollectionsResponse = {
-  collections: {
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor: string | null;
-    };
-    edges: Array<{
-      node: {
-        id: string;
-        title: string;
-        publishedOnPublication: boolean;
-        startDate: {
-          value: string;
-        } | null;
-        endDate: {
-          value: string;
-        } | null;
+type ProductsInCollectionData = {
+  collection?: {
+    products?: {
+      pageInfo?: {
+        hasNextPage?: boolean;
+        endCursor?: string | null;
       };
-    }>;
+      nodes?: ProductStatusNode[];
+    };
   };
 };
 
-type GetCollectionStateResponse = {
-  node: {
-    id: string;
-    publishedOnPublication: boolean;
-  } | null;
-};
-
-type PublishMutationResponse = {
-  publishablePublish: {
-    userErrors: Array<{
+type ProductUpdateData = {
+  productUpdate?: {
+    userErrors?: Array<{
       field?: string[] | null;
-      message: string;
+      message?: string;
     }>;
   };
 };
-
-type UnpublishMutationResponse = {
-  publishableUnpublish: {
-    userErrors: Array<{
-      field?: string[] | null;
-      message: string;
-    }>;
-  };
-};
-
-function formatMutationErrors(errors: Array<{ field?: string[] | null; message: string }>): string {
-  return errors
-    .map((error) => {
-      const path = error.field?.length ? `${error.field.join(".")}: ` : "";
-      return `${path}${error.message}`;
-    })
-    .join("; ");
-}
-
-export async function getShopPublications(shopDomain: string, first = 20): Promise<PublicationSummary[]> {
-  const data = await shopifyAdminGraphqlRequest<GetPublicationsResponse, { first: number }>(
-    shopDomain,
-    `#graphql
-      query GetShopPublications($first: Int!) {
-        publications(first: $first) {
-          nodes {
-            id
-            name
-          }
-        }
-      }
-    `,
-    { first },
-  );
-
-  return data.publications.nodes.map((publication) => ({
-    id: publication.id,
-    name: publication.name ?? null,
-  }));
-}
 
 export async function getShopIanaTimezone(shopDomain: string): Promise<string> {
-  const data = await shopifyAdminGraphqlRequest<GetShopTimezoneResponse>(shopDomain, `#graphql
+  const data = await shopifyAdminGraphqlRequest<any, any>(
+    shopDomain,
+    `#graphql
     query GetShopTimezone {
       shop {
         ianaTimezone
       }
     }
-  `);
+  `,
+    {},
+  );
 
-  return data.shop.ianaTimezone;
+  return data.shop?.ianaTimezone || "UTC";
 }
+
+const GET_COLLECTIONS_QUERY = `#graphql
+  query GetCollections(
+    $first: Int!
+    $after: String
+    $startNamespace: String!
+    $startKey: String!
+    $endNamespace: String!
+    $endKey: String!
+    $availabilityModeKey: String!
+    $displayModeKey: String!
+  ) {
+    collections(first: $first, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        title
+        startDate: metafield(namespace: $startNamespace, key: $startKey) { value }
+        endDate: metafield(namespace: $endNamespace, key: $endKey) { value }
+        availabilityMode: metafield(namespace: $startNamespace, key: $availabilityModeKey) { value }
+        displayMode: metafield(namespace: $startNamespace, key: $displayModeKey) { value }
+        resourcePublications(first: 10) {
+          nodes {
+            publication { id name }
+            isPublished
+          }
+        }
+      }
+    }
+  }
+`;
 
 export async function getScheduledCollections(
   shopDomain: string,
-  options: GetScheduledCollectionsOptions,
-): Promise<ScheduledCollectionsPage> {
-  const searchQuery = `metafields.${options.metafieldNamespace}.${options.startDateKey}:* AND metafields.${options.metafieldNamespace}.${options.endDateKey}:*`;
+  options: {
+    publicationId: string;
+    metafieldNamespace: string;
+    startDateKey: string;
+    endDateKey: string;
+    cursor?: string | null;
+    pageSize?: number;
+  },
+): Promise<GetScheduledCollectionsResult> {
+  const variables = {
+    first: options.pageSize || 50,
+    after: options.cursor || null,
+    startNamespace: options.metafieldNamespace,
+    startKey: options.startDateKey,
+    endNamespace: options.metafieldNamespace,
+    endKey: options.endDateKey,
+    availabilityModeKey: AVAILABILITY_MODE_KEY,
+    displayModeKey: DISPLAY_MODE_KEY,
+  };
 
-  const data = await shopifyAdminGraphqlRequest<
-    GetScheduledCollectionsResponse,
-    {
-      after?: string | null;
-      first: number;
-      query: string;
-      publicationId: string;
-      namespace: string;
-      startKey: string;
-      endKey: string;
-    }
-  >(
+  const data = await shopifyAdminGraphqlRequest<any, any>(
     shopDomain,
-    `#graphql
-      query GetScheduledCollections(
-        $after: String
-        $first: Int!
-        $query: String!
-        $publicationId: ID!
-        $namespace: String!
-        $startKey: String!
-        $endKey: String!
-      ) {
-        collections(first: $first, after: $after, query: $query) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          edges {
-            node {
-              id
-              title
-              publishedOnPublication(publicationId: $publicationId)
-              startDate: metafield(namespace: $namespace, key: $startKey) {
-                value
-              }
-              endDate: metafield(namespace: $namespace, key: $endKey) {
-                value
-              }
-            }
-          }
-        }
-      }
-    `,
-    {
-      after: options.cursor ?? null,
-      first: options.pageSize ?? 100,
-      query: searchQuery,
-      publicationId: options.publicationId,
-      namespace: options.metafieldNamespace,
-      startKey: options.startDateKey,
-      endKey: options.endDateKey,
-    },
+    GET_COLLECTIONS_QUERY,
+    variables,
   );
 
-  return {
-    collections: data.collections.edges.map(({ node }) => ({
+  const rawCollections = data.collections?.nodes || [];
+  const pageInfo = data.collections?.pageInfo;
+
+  const collections = rawCollections.map((node: any) => {
+    const publication = node.resourcePublications.nodes.find(
+      (p: any) => p.publication.id === options.publicationId,
+    );
+
+    return {
       id: node.id,
       title: node.title,
-      startDateValue: node.startDate?.value ?? null,
-      endDateValue: node.endDate?.value ?? null,
-      isPublishedOnTargetPublication: node.publishedOnPublication,
-    })),
-    hasNextPage: data.collections.pageInfo.hasNextPage,
-    nextCursor: data.collections.pageInfo.endCursor,
+      startDateValue: node.startDate?.value || null,
+      endDateValue: node.endDate?.value || null,
+      availabilityModeValue: node.availabilityMode?.value || null,
+      displayModeValue: node.displayMode?.value || null,
+      isPublishedOnTargetPublication: publication?.isPublished || false,
+    };
+  });
+
+  return {
+    collections,
+    hasNextPage: pageInfo?.hasNextPage || false,
+    nextCursor: pageInfo?.endCursor || null,
   };
-}
-
-async function getCollectionPublicationState(
-  shopDomain: string,
-  collectionGid: string,
-  publicationGid: string,
-): Promise<boolean> {
-  const data = await shopifyAdminGraphqlRequest<
-    GetCollectionStateResponse,
-    { id: string; publicationId: string }
-  >(
-    shopDomain,
-    `#graphql
-      query GetCollectionPublicationState($id: ID!, $publicationId: ID!) {
-        node(id: $id) {
-          ... on Collection {
-            id
-            publishedOnPublication(publicationId: $publicationId)
-          }
-        }
-      }
-    `,
-    {
-      id: collectionGid,
-      publicationId: publicationGid,
-    },
-  );
-
-  if (!data.node) {
-    throw new ShopifyAdminGraphqlError(`Collection ${collectionGid} was not found.`, shopDomain, {
-      collectionGid,
-    });
-  }
-
-  return data.node.publishedOnPublication;
 }
 
 export async function syncCollectionVisibility(
@@ -255,103 +158,153 @@ export async function syncCollectionVisibility(
   collectionGid: string,
   publicationGid: string,
   shouldBePublished: boolean,
-  options?: { dryRun?: boolean },
-): Promise<SyncCollectionVisibilityResult> {
-  const previousState = await getCollectionPublicationState(shopDomain, collectionGid, publicationGid);
+  options: { dryRun?: boolean } = {},
+): Promise<SyncResult> {
+  const data = await shopifyAdminGraphqlRequest<any, { id: string }>(
+    shopDomain,
+    `#graphql
+    query GetCollectionStatus($id: ID!) {
+      collection(id: $id) {
+        resourcePublications(first: 100) {
+          nodes {
+            publication { id }
+            isPublished
+          }
+        }
+      }
+    }
+  `,
+    { id: collectionGid },
+  );
 
-  if (previousState === shouldBePublished) {
+  const publication = data.collection?.resourcePublications.nodes.find(
+    (p: any) => p.publication.id === publicationGid,
+  );
+
+  const previousState = publication?.isPublished || false;
+
+  const changedCount = await syncProductsStatusInCollection(
+    shopDomain,
+    collectionGid,
+    shouldBePublished,
+    { dryRun: options.dryRun },
+  );
+
+  if (changedCount === 0) {
     return {
-      action: "skip",
+      action: "SKIP",
       previousState,
-      currentState: previousState,
-      mutated: false,
-      dryRun: options?.dryRun ?? false,
+      dryRun: options.dryRun ?? false,
     };
   }
 
-  if (options?.dryRun) {
+  if (options.dryRun) {
     return {
-      action: shouldBePublished ? "publish" : "unpublish",
+      action: shouldBePublished ? "PUBLISH" : "UNPUBLISH",
       previousState,
-      currentState: previousState,
-      mutated: false,
       dryRun: true,
     };
   }
 
-  if (shouldBePublished) {
-    const data = await shopifyAdminGraphqlRequest<
-      PublishMutationResponse,
-      { collectionId: string; input: Array<{ publicationId: string }> }
+  return {
+    action: shouldBePublished ? "PUBLISH" : "UNPUBLISH",
+    previousState,
+    dryRun: false,
+  };
+}
+
+async function syncProductsStatusInCollection(
+  shopDomain: string,
+  collectionGid: string,
+  shouldBeActive: boolean,
+  options: { dryRun?: boolean } = {},
+): Promise<number> {
+  const targetStatus = shouldBeActive ? "ACTIVE" : "DRAFT";
+  const productsToUpdate: ProductStatusNode[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const data: ProductsInCollectionData = await shopifyAdminGraphqlRequest<
+      ProductsInCollectionData,
+      { id: string; after: string | null }
     >(
       shopDomain,
       `#graphql
-        mutation PublishCollection($collectionId: ID!, $input: [PublicationInput!]!) {
-          publishablePublish(id: $collectionId, input: $input) {
-            userErrors {
-              field
-              message
+      query GetProductsInCollection($id: ID!, $after: String) {
+        collection(id: $id) {
+          products(first: 250, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
             }
-          }
-        }
-      `,
-      {
-        collectionId: collectionGid,
-        input: [{ publicationId: publicationGid }],
-      },
-    );
-
-    if (data.publishablePublish.userErrors.length) {
-      throw new ShopifyAdminGraphqlError(
-        formatMutationErrors(data.publishablePublish.userErrors),
-        shopDomain,
-        { collectionGid, publicationGid },
-      );
-    }
-
-    return {
-      action: "publish",
-      previousState,
-      currentState: true,
-      mutated: true,
-      dryRun: false,
-    };
-  }
-
-  const data = await shopifyAdminGraphqlRequest<
-    UnpublishMutationResponse,
-    { collectionId: string; input: Array<{ publicationId: string }> }
-  >(
-    shopDomain,
-    `#graphql
-      mutation UnpublishCollection($collectionId: ID!, $input: [PublicationInput!]!) {
-        publishableUnpublish(id: $collectionId, input: $input) {
-          userErrors {
-            field
-            message
+            nodes {
+              id
+              status
+            }
           }
         }
       }
     `,
-    {
-      collectionId: collectionGid,
-      input: [{ publicationId: publicationGid }],
-    },
-  );
+      { id: collectionGid, after: cursor },
+    );
 
-  if (data.publishableUnpublish.userErrors.length) {
-    throw new ShopifyAdminGraphqlError(
-      formatMutationErrors(data.publishableUnpublish.userErrors),
-      shopDomain,
-      { collectionGid, publicationGid },
+    const products = data.collection?.products?.nodes || [];
+    productsToUpdate.push(...products.filter((product) => product.status !== targetStatus));
+
+    const pageInfo = data.collection?.products?.pageInfo;
+    cursor = pageInfo?.hasNextPage ? pageInfo.endCursor ?? null : null;
+  } while (cursor);
+
+  if (productsToUpdate.length === 0) return 0;
+
+  console.log("[CollectionScheduler] Updating product statuses.", {
+    shopDomain,
+    productCount: productsToUpdate.length,
+    targetStatus,
+    dryRun: options.dryRun ?? false,
+  });
+
+  if (options.dryRun) {
+    return productsToUpdate.length;
+  }
+
+  // Process in chunks of 5 to balance speed and rate limits
+  const chunkSize = 5;
+  for (let i = 0; i < productsToUpdate.length; i += chunkSize) {
+    const chunk = productsToUpdate.slice(i, i + chunkSize);
+
+    await Promise.all(
+      chunk.map(async (product) => {
+        const data: ProductUpdateData = await shopifyAdminGraphqlRequest<
+          ProductUpdateData,
+          { id: string; status: string }
+        >(
+          shopDomain,
+          `#graphql
+          mutation UpdateProductStatus($id: ID!, $status: ProductStatus!) {
+            productUpdate(input: { id: $id, status: $status }) {
+              userErrors { field message }
+            }
+          }
+        }
+        `,
+          { id: product.id, status: targetStatus },
+        );
+
+        const userErrors = data.productUpdate?.userErrors || [];
+        if (userErrors.length > 0) {
+          const details = userErrors
+            .map((error) => {
+              const field = error.field?.join(".") || "unknown_field";
+              const message = error.message || "Unknown user error";
+              return `${field}: ${message}`;
+            })
+            .join("; ");
+          throw new Error(`Shopify rejected a product status update: ${details}`);
+        }
+      }),
     );
   }
 
-  return {
-    action: "unpublish",
-    previousState,
-    currentState: false,
-    mutated: true,
-    dryRun: false,
-  };
+  return productsToUpdate.length;
 }

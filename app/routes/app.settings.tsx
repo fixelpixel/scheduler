@@ -13,9 +13,24 @@ import {
   Banner,
   Text,
   Divider,
+  Badge,
+  InlineStack,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { shopRepository } from "../repositories/shop.repository.server";
+import {
+  AVAILABILITY_MODE_KEY,
+  CHECKOUT_MESSAGE_KEY,
+  CHECKOUT_MODE_KEY,
+  CUSTOM_MESSAGE_KEY,
+  DISPLAY_MODE_KEY,
+  END_DATE_KEY_FALLBACK,
+  NOTICE_SETTINGS_KEY,
+  NOTICE_VARIANT_KEY,
+  SCHEDULE_NAMESPACE_FALLBACK,
+  START_DATE_KEY_FALLBACK,
+  STOREFRONT_MODE_KEY,
+} from "../services/schedule-contract";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -35,17 +50,91 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const publications: Array<{ id: string; name: string }> =
     payload.data?.publications?.nodes || [];
 
-  return json({ shop, publications });
+  const isScopeGranted = session.scope?.split(",").includes("write_products");
+  return json({ shop, publications, isScopeGranted });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
+  const actionType = formData.get("actionType");
+
+  if (actionType === "setActive") {
+    const isActive = formData.get("isActive") === "true";
+
+    await shopRepository.upsertConfig({
+      shopDomain: session.shop,
+      isActive,
+    });
+
+    return json({ success: true, statusChanged: true, isActive });
+  }
+
+  if (actionType === "createDefinitions") {
+    const shop = await shopRepository.findByShopDomain(session.shop);
+    const namespace = shop?.metafieldNamespace || SCHEDULE_NAMESPACE_FALLBACK;
+    const startKey = shop?.startDateKey || START_DATE_KEY_FALLBACK;
+    const endKey = shop?.endDateKey || END_DATE_KEY_FALLBACK;
+
+    const createDef = async (key: string, name: string, type = "date_time") => {
+      return admin.graphql(
+        `#graphql
+        mutation CreateMetafieldDefinition($definition: MetafieldDefinitionInput!) {
+          metafieldDefinitionCreate(definition: $definition) {
+            createdDefinition { id name }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            definition: {
+              namespace,
+              key,
+              name,
+              ownerType: "COLLECTION",
+              type,
+            },
+          },
+        },
+      );
+    };
+
+    const resStart = await createDef(startKey, "Schedule Start Date");
+    const resEnd = await createDef(endKey, "Schedule End Date");
+    const resAvailabilityMode = await createDef(AVAILABILITY_MODE_KEY, "Schedule Availability Mode", "single_line_text_field");
+    const resStorefrontMode = await createDef(STOREFRONT_MODE_KEY, "Schedule Storefront Mode", "single_line_text_field");
+    const resDisplayMode = await createDef(DISPLAY_MODE_KEY, "Legacy Schedule Display Mode", "single_line_text_field");
+    const resCustomMessage = await createDef(CUSTOM_MESSAGE_KEY, "Schedule Custom Message", "multi_line_text_field");
+    const resCheckoutMode = await createDef(CHECKOUT_MODE_KEY, "Schedule Checkout Mode", "single_line_text_field");
+    const resCheckoutMessage = await createDef(CHECKOUT_MESSAGE_KEY, "Schedule Checkout Message", "multi_line_text_field");
+    const resNoticeVariant = await createDef(NOTICE_VARIANT_KEY, "Schedule Notice Variant", "single_line_text_field");
+    const resNoticeSettings = await createDef(NOTICE_SETTINGS_KEY, "Schedule Notice Settings", "json");
+
+    return json({
+      success: true,
+      created: true,
+      details: {
+        start: await resStart.json(),
+        end: await resEnd.json(),
+        availabilityMode: await resAvailabilityMode.json(),
+        storefrontMode: await resStorefrontMode.json(),
+        displayMode: await resDisplayMode.json(),
+        customMessage: await resCustomMessage.json(),
+        checkoutMode: await resCheckoutMode.json(),
+        checkoutMessage: await resCheckoutMessage.json(),
+        noticeVariant: await resNoticeVariant.json(),
+        noticeSettings: await resNoticeSettings.json(),
+      }
+    });
+  }
 
   const targetPublicationId = formData.get("targetPublicationId") as string;
-  const metafieldNamespace = (formData.get("metafieldNamespace") as string) || "custom";
-  const startDateKey = (formData.get("startDateKey") as string) || "start_date";
-  const endDateKey = (formData.get("endDateKey") as string) || "end_date";
+  const metafieldNamespace =
+    (formData.get("metafieldNamespace") as string) || SCHEDULE_NAMESPACE_FALLBACK;
+  const startDateKey =
+    (formData.get("startDateKey") as string) || START_DATE_KEY_FALLBACK;
+  const endDateKey =
+    (formData.get("endDateKey") as string) || END_DATE_KEY_FALLBACK;
 
   await shopRepository.upsertConfig({
     shopDomain: session.shop,
@@ -59,15 +148,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-  const { shop, publications } = useLoaderData<typeof loader>();
+  const { shop, publications, isScopeGranted } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
 
   const [publicationId, setPublicationId] = useState(shop?.targetPublicationId || "");
-  const [namespace, setNamespace] = useState(shop?.metafieldNamespace || "custom");
-  const [startKey, setStartKey] = useState(shop?.startDateKey || "start_date");
-  const [endKey, setEndKey] = useState(shop?.endDateKey || "end_date");
+  const [namespace, setNamespace] = useState(
+    shop?.metafieldNamespace || SCHEDULE_NAMESPACE_FALLBACK,
+  );
+  const [startKey, setStartKey] = useState(shop?.startDateKey || START_DATE_KEY_FALLBACK);
+  const [endKey, setEndKey] = useState(shop?.endDateKey || END_DATE_KEY_FALLBACK);
+  const isSchedulerActive = shop?.isActive ?? false;
 
   const pubOptions = [
     { label: "Select a publication", value: "", disabled: true },
@@ -77,6 +169,44 @@ export default function SettingsPage() {
   return (
     <Page title="Settings">
       <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">
+                    Scheduler Status
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    When disabled, automatic and manual sync runs will not change products.
+                  </Text>
+                </BlockStack>
+                <Badge tone={isSchedulerActive ? "success" : "critical"}>
+                  {isSchedulerActive ? "On" : "Off"}
+                </Badge>
+              </InlineStack>
+              <form method="post">
+                <input type="hidden" name="actionType" value="setActive" />
+                <input
+                  type="hidden"
+                  name="isActive"
+                  value={isSchedulerActive ? "false" : "true"}
+                />
+                <Button loading={isLoading} submit>
+                  {isSchedulerActive ? "Turn Scheduler Off" : "Turn Scheduler On"}
+                </Button>
+              </form>
+              {(actionData as any)?.statusChanged && (
+                <Banner title="Scheduler status saved" tone="success">
+                  <Text as="p">
+                    Scheduler is now {(actionData as any).isActive ? "on" : "off"}.
+                  </Text>
+                </Banner>
+              )}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
@@ -121,8 +251,9 @@ export default function SettingsPage() {
               </Text>
               <Text as="p" tone="subdued">
                 Namespace and keys used to read schedule dates from collection metafields.
-                Default is <strong>custom</strong> / <strong>start_date</strong> /{" "}
-                <strong>end_date</strong> — matches the standard Shopify metafield setup.
+                Default is <strong>{SCHEDULE_NAMESPACE_FALLBACK}</strong> /{" "}
+                <strong>{START_DATE_KEY_FALLBACK}</strong> /{" "}
+                <strong>{END_DATE_KEY_FALLBACK}</strong> — matches the Scheduler metafield setup.
               </Text>
               <form method="post">
                 <BlockStack gap="400">
@@ -172,14 +303,23 @@ export default function SettingsPage() {
         </Layout.Section>
 
         <Layout.Section>
-          <Banner tone="warning" title="Required: write_products scope">
-            <Text as="p">
-              To edit collection schedules from this app, the{" "}
-              <strong>write_products</strong> permission must be granted. If the Collections
-              editor shows a permission error, re-install the app from the Shopify Partners
-              dashboard to grant the updated scope.
-            </Text>
-          </Banner>
+          {isScopeGranted ? (
+            <Banner tone="success" title="Permissions Verified">
+              <Text as="p">
+                The <strong>write_products</strong> scope is granted. You can now manage
+                collection schedules and product statuses.
+              </Text>
+            </Banner>
+          ) : (
+            <Banner tone="warning" title="Required: write_products scope">
+              <Text as="p">
+                To edit collection schedules from this app, the{" "}
+                <strong>write_products</strong> permission must be granted. If the Collections
+                editor shows a permission error, re-install the app from the Shopify Partners
+                dashboard to grant the updated scope.
+              </Text>
+            </Banner>
+          )}
         </Layout.Section>
       </Layout>
     </Page>

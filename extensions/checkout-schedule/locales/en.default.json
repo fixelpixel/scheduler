@@ -1,0 +1,16 @@
+{
+  "name": "Checkout schedule",
+  "settings": {
+    "app_url": {
+      "label": "App URL",
+      "description": "Public app URL for schedule notices. Required for Shopify Plus checkout extensibility."
+    },
+    "shop_domain": {
+      "label": "Shop domain",
+      "description": "Optional .myshopify.com fallback if checkout context does not expose the shop domain. Do not enter secrets."
+    }
+  },
+  "checkout_schedule": {
+    "orders_close_in": "Orders close in"
+  }
+}
