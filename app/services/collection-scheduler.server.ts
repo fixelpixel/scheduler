@@ -26,6 +26,7 @@ export type SyncResult = {
 type ProductStatusNode = {
   id: string;
   status: string;
+  publishedOnTargetPublication: boolean;
 };
 
 type ProductsInCollectionData = {
@@ -42,6 +43,21 @@ type ProductsInCollectionData = {
 
 type ProductUpdateData = {
   productUpdate?: {
+    userErrors?: Array<{
+      field?: string[] | null;
+      message?: string;
+    }>;
+  };
+};
+
+type PublishableMutationData = {
+  publishablePublish?: {
+    userErrors?: Array<{
+      field?: string[] | null;
+      message?: string;
+    }>;
+  };
+  publishableUnpublish?: {
     userErrors?: Array<{
       field?: string[] | null;
       message?: string;
@@ -186,6 +202,7 @@ export async function syncCollectionVisibility(
   const changedCount = await syncProductsStatusInCollection(
     shopDomain,
     collectionGid,
+    publicationGid,
     shouldBePublished,
     { dryRun: options.dryRun },
   );
@@ -216,6 +233,7 @@ export async function syncCollectionVisibility(
 async function syncProductsStatusInCollection(
   shopDomain: string,
   collectionGid: string,
+  publicationGid: string,
   shouldBeActive: boolean,
   options: { dryRun?: boolean } = {},
 ): Promise<number> {
@@ -226,11 +244,11 @@ async function syncProductsStatusInCollection(
   do {
     const data: ProductsInCollectionData = await shopifyAdminGraphqlRequest<
       ProductsInCollectionData,
-      { id: string; after: string | null }
+      { id: string; after: string | null; publicationId: string }
     >(
       shopDomain,
       `#graphql
-      query GetProductsInCollection($id: ID!, $after: String) {
+      query GetProductsInCollection($id: ID!, $after: String, $publicationId: ID!) {
         collection(id: $id) {
           products(first: 250, after: $after) {
             pageInfo {
@@ -240,16 +258,24 @@ async function syncProductsStatusInCollection(
             nodes {
               id
               status
+              publishedOnTargetPublication: publishedOnPublication(publicationId: $publicationId)
             }
           }
         }
       }
     `,
-      { id: collectionGid, after: cursor },
+      { id: collectionGid, after: cursor, publicationId: publicationGid },
     );
 
     const products = data.collection?.products?.nodes || [];
-    productsToUpdate.push(...products.filter((product) => product.status !== targetStatus));
+    productsToUpdate.push(
+      ...products.filter((product) => {
+        if (product.status !== targetStatus) return true;
+        return shouldBeActive
+          ? !product.publishedOnTargetPublication
+          : product.publishedOnTargetPublication;
+      }),
+    );
 
     const pageInfo = data.collection?.products?.pageInfo;
     cursor = pageInfo?.hasNextPage ? pageInfo.endCursor ?? null : null;
@@ -257,10 +283,11 @@ async function syncProductsStatusInCollection(
 
   if (productsToUpdate.length === 0) return 0;
 
-  console.log("[CollectionScheduler] Updating product statuses.", {
+  console.log("[CollectionScheduler] Syncing product statuses and publications.", {
     shopDomain,
     productCount: productsToUpdate.length,
     targetStatus,
+    publicationGid,
     dryRun: options.dryRun ?? false,
   });
 
@@ -268,43 +295,100 @@ async function syncProductsStatusInCollection(
     return productsToUpdate.length;
   }
 
-  // Process in chunks of 5 to balance speed and rate limits
-  const chunkSize = 5;
-  for (let i = 0; i < productsToUpdate.length; i += chunkSize) {
-    const chunk = productsToUpdate.slice(i, i + chunkSize);
+  for (const product of productsToUpdate) {
+    if (!shouldBeActive && product.publishedOnTargetPublication) {
+      await updateProductPublication(shopDomain, product.id, publicationGid, false);
+    }
 
-    await Promise.all(
-      chunk.map(async (product) => {
-        const data: ProductUpdateData = await shopifyAdminGraphqlRequest<
-          ProductUpdateData,
-          { id: string; status: string }
-        >(
-          shopDomain,
-          `#graphql
-          mutation UpdateProductStatus($id: ID!, $status: ProductStatus!) {
-            productUpdate(input: { id: $id, status: $status }) {
-              userErrors { field message }
-            }
-          }
-        }
-        `,
-          { id: product.id, status: targetStatus },
-        );
+    if (product.status !== targetStatus) {
+      await updateProductStatus(shopDomain, product.id, targetStatus);
+    }
 
-        const userErrors = data.productUpdate?.userErrors || [];
-        if (userErrors.length > 0) {
-          const details = userErrors
-            .map((error) => {
-              const field = error.field?.join(".") || "unknown_field";
-              const message = error.message || "Unknown user error";
-              return `${field}: ${message}`;
-            })
-            .join("; ");
-          throw new Error(`Shopify rejected a product status update: ${details}`);
-        }
-      }),
-    );
+    if (shouldBeActive && !product.publishedOnTargetPublication) {
+      await updateProductPublication(shopDomain, product.id, publicationGid, true);
+    }
   }
 
   return productsToUpdate.length;
+}
+
+async function updateProductStatus(
+  shopDomain: string,
+  productId: string,
+  status: string,
+): Promise<void> {
+  const data: ProductUpdateData = await shopifyAdminGraphqlRequest<
+    ProductUpdateData,
+    { id: string; status: string }
+  >(
+    shopDomain,
+    `#graphql
+    mutation UpdateProductStatus($id: ID!, $status: ProductStatus!) {
+      productUpdate(input: { id: $id, status: $status }) {
+        userErrors { field message }
+      }
+    }
+  `,
+    { id: productId, status },
+  );
+
+  assertNoUserErrors(data.productUpdate?.userErrors, "Shopify rejected a product status update");
+}
+
+async function updateProductPublication(
+  shopDomain: string,
+  productId: string,
+  publicationId: string,
+  shouldPublish: boolean,
+): Promise<void> {
+  const data: PublishableMutationData = await shopifyAdminGraphqlRequest<
+    PublishableMutationData,
+    { id: string; input: Array<{ publicationId: string }> }
+  >(
+    shopDomain,
+    shouldPublish
+      ? `#graphql
+        mutation PublishProduct($id: ID!, $input: [PublicationInput!]!) {
+          publishablePublish(id: $id, input: $input) {
+            userErrors { field message }
+          }
+        }
+      `
+      : `#graphql
+        mutation UnpublishProduct($id: ID!, $input: [PublicationInput!]!) {
+          publishableUnpublish(id: $id, input: $input) {
+            userErrors { field message }
+          }
+        }
+      `,
+    { id: productId, input: [{ publicationId }] },
+  );
+
+  const userErrors = shouldPublish
+    ? data.publishablePublish?.userErrors
+    : data.publishableUnpublish?.userErrors;
+
+  assertNoUserErrors(
+    userErrors,
+    shouldPublish
+      ? "Shopify rejected a product publication update"
+      : "Shopify rejected a product unpublication update",
+  );
+}
+
+function assertNoUserErrors(
+  userErrors: Array<{ field?: string[] | null; message?: string }> | undefined,
+  prefix: string,
+): void {
+  if (!userErrors?.length) return;
+
+  const details = userErrors
+    .map((error) => {
+      const field = error.field?.join(".") || "unknown_field";
+      const message = error.message || "Unknown user error";
+      return `${field}: ${message}`;
+    })
+    .join("; ");
+
+  throw new Error(`${prefix}: ${details}`);
 }

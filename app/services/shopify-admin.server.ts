@@ -1,7 +1,7 @@
 import { unauthenticated } from "../shopify.server";
 
-const DEFAULT_MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 750;
+const DEFAULT_MAX_RETRIES = 6;
+const BASE_RETRY_DELAY_MS = 1_000;
 
 type GraphqlError = {
   message: string;
@@ -47,6 +47,14 @@ function isThrottled(errors: GraphqlError[] | undefined, statusCode: number): bo
   return (errors ?? []).some((error) => error.extensions?.code === "THROTTLED");
 }
 
+function isThrownThrottleError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /throttled|too many requests|429/i.test(error.message);
+}
+
 function getRetryDelayMs(attempt: number, retryAfterHeader: string | null): number {
   const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN;
 
@@ -65,9 +73,20 @@ export async function shopifyAdminGraphqlRequest<TData, TVariables extends Recor
   const { admin } = await unauthenticated.admin(shopDomain);
 
   for (let attempt = 0; attempt <= DEFAULT_MAX_RETRIES; attempt += 1) {
-    const response = await admin.graphql(query, {
-      variables,
-    });
+    let response: Response;
+
+    try {
+      response = await admin.graphql(query, {
+        variables,
+      });
+    } catch (error) {
+      if (attempt < DEFAULT_MAX_RETRIES && isThrownThrottleError(error)) {
+        await sleep(getRetryDelayMs(attempt, null));
+        continue;
+      }
+
+      throw error;
+    }
 
     let payload: GraphqlEnvelope<TData>;
 

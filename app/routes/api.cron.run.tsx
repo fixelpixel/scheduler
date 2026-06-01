@@ -5,6 +5,8 @@ import {
   runScheduleJobForShop,
 } from "../jobs/run-schedule-job.server";
 
+let activeRun: Promise<Response> | null = null;
+
 function parseBoolean(value: string | null): boolean {
   return value === "true" || value === "1";
 }
@@ -28,6 +30,18 @@ function extractCronSecret(request: Request): string | null {
 }
 
 async function handleCronRequest(request: Request) {
+  if (activeRun) {
+    return json({ ok: true, skipped: true, reason: "Scheduler run already in progress." });
+  }
+
+  activeRun = executeCronRequest(request).finally(() => {
+    activeRun = null;
+  });
+
+  return activeRun;
+}
+
+async function executeCronRequest(request: Request) {
   const configuredSecret = process.env.CRON_SECRET;
 
   if (!configuredSecret) {
